@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OKEGAS Central Template Hub & CS Broadcast Engine</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857'
+            },
+            wa: {
+              teal: '#075e54',
+              green: '#25d366',
+              dark: '#111b21',
+              bubbleOut: '#005c4b',
+              bubbleIn: '#202c33',
+              chatBg: '#0c1317'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Alpine Component Registration (Must be declared before Alpine.js executes) -->
+  <script>
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzw5l2B0wujMQLkGABIwxlbXrz-SH9Chutm_eIrgwIMFIEqQDrZmCB1wCGdkoK7KfHifw/exec';
+
+    function createTemplateHubComponent() {
+      return {
+        // Complete Registered State Variables
+        isLoading: true,
+        searchQuery: '',
+        filterProduct: '',
+        filterCategory: '',
+        products: [],
+        categories: [],
+        templates: [],
+        activeTemplate: {
+          id: '',
+          name: '',
+          productId: '',
+          categoryId: '',
+          engine: 'manual', // manual | woowa | fonnte
+          bubbles: [
+            { id: 'b_1', text: 'Halo {name}! 👋 Terima kasih telah menghubungi kami.', images: [] }
+          ]
+        },
+        isSaving: false,
+
+        // Modals & Temp States
+        showMasterModal: false,
+        showTemplateModal: false,
+        newProductName: '',
+        newCategoryName: '',
+        isManagingMaster: false,
+        itemToDelete: null,
+        previewImageModalUrl: null,
+        toasts: [],
+
+        // Testing Variables
+        testVars: {
+          name: 'Kak Rina',
+          var1: 'Diskon 30%',
+          var2: 'Free Ongkir',
+          product: 'DVN'
+        },
+
+        initApp: function() {
+          this.fetchInitialState();
+          this.refreshIcons();
+        },
+
+        refreshIcons: function() {
+          this.$nextTick(function() {
+            if (window.lucide) lucide.createIcons();
+          });
+        },
+
+        showToast: function(message, type) {
+          type = type || 'success';
+          var id = Date.now() + Math.random();
+          this.toasts.push({ id: id, message: message, type: type });
+          this.refreshIcons();
+          var self = this;
+          setTimeout(function() {
+            self.toasts = self.toasts.filter(function(t) { return t.id !== id; });
+          }, 3500);
+        },
+
+        // API Dispatcher via fetch() POST
+        callBackend: function(action, payload) {
+          return fetch(SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: action, payload: payload || {} })
+          })
+          .then(function(r) { return r.text(); })
+          .then(function(text) {
+            try {
+              return JSON.parse(text);
+            } catch (err) {
+              return { ok: false, message: 'Gagal memproses respon server: ' + err.message };
+            }
+          });
+        },
+
+        fetchInitialState: function() {
+          this.isLoading = true;
+          var self = this;
+          this.callBackend('getInitialAppState', {})
+            .then(function(res) {
+              self.isLoading = false;
+              if (res.ok && res.data) {
+                self.products = res.data.products || [];
+                self.categories = res.data.categories || [];
+                self.templates = res.data.templates || [];
+                if (self.templates.length > 0 && !self.activeTemplate.id) {
+                  self.selectTemplate(self.templates[0]);
+                } else if (self.products.length > 0 && !self.activeTemplate.productId) {
+                  self.activeTemplate.productId = self.products[0].id;
+                  self.activeTemplate.categoryId = self.categories.length > 0 ? self.categories[0].id : '';
+                }
+              } else {
+                self.showToast(res.message || 'Gagal memuat data master', 'error');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(err) {
+              self.isLoading = false;
+              self.showToast('Koneksi backend gagal: ' + err.message, 'error');
+            });
+        },
+
+        filteredTemplates: function() {
+          var self = this;
+          return self.templates.filter(function(t) {
+            var matchProd = !self.filterProduct || t.productId === self.filterProduct;
+            var matchCat = !self.filterCategory || t.categoryId === self.filterCategory;
+            var matchSearch = true;
+            if (self.searchQuery && self.searchQuery.trim()) {
+              var q = self.searchQuery.toLowerCase();
+              var matchName = t.name ? t.name.toLowerCase().indexOf(q) !== -1 : false;
+              var matchBubbles = t.bubblesJson ? t.bubblesJson.toLowerCase().indexOf(q) !== -1 : false;
+              matchSearch = matchName || matchBubbles;
+            }
+            return matchProd && matchCat && matchSearch;
+          });
+        },
+
+        parseBubbles: function(jsonString) {
+          if (!jsonString) return [];
+          try {
+            return JSON.parse(jsonString);
+          } catch (e) {
+            return [];
+          }
+        },
+
+        getProductName: function(id) {
+          var found = this.products.find(function(p) { return p.id === id; });
+          return found ? found.name : 'All Product';
+        },
+
+        getCategoryName: function(id) {
+          var found = this.categories.find(function(c) { return c.id === id; });
+          return found ? found.name : '-';
+        },
+
+        selectTemplate: function(tpl) {
+          var bubbles = this.parseBubbles(tpl.bubblesJson);
+          if (bubbles.length === 0) {
+            bubbles = [{ id: 'b_1', text: '', images: [] }];
+          }
+          this.activeTemplate = {
+            id: tpl.id,
+            name: tpl.name,
+            productId: tpl.productId,
+            categoryId: tpl.categoryId,
+            engine: tpl.engine || 'manual',
+            bubbles: JSON.parse(JSON.stringify(bubbles))
+          };
+          this.refreshIcons();
+        },
+
+        openEditModal: function(tpl) {
+          if (tpl) {
+            this.selectTemplate(tpl);
+          }
+          this.showTemplateModal = true;
+          this.refreshIcons();
+        },
+
+        resetFormForNew: function() {
+          this.activeTemplate = {
+            id: '',
+            name: '',
+            productId: this.products.length > 0 ? this.products[0].id : '',
+            categoryId: this.categories.length > 0 ? this.categories[0].id : '',
+            engine: 'manual',
+            bubbles: [
+              { id: 'b_' + Date.now(), text: 'Halo {name}! 👋 Ada penawaran spesial untuk {product} hari ini.', images: [] }
+            ]
+          };
+          this.showTemplateModal = true;
+          this.refreshIcons();
+        },
+
+        duplicateTemplate: function(tpl) {
+          var clone = JSON.parse(JSON.stringify(tpl));
+          clone.id = '';
+          clone.name = clone.name + ' (Salinan)';
+          this.selectTemplate(clone);
+          this.showToast('Template berhasil diduplikasi ke editor');
+        },
+
+        confirmDelete: function(tpl) {
+          this.itemToDelete = tpl;
+          this.refreshIcons();
+        },
+
+        executeDelete: function() {
+          if (!this.itemToDelete) return;
+          var id = this.itemToDelete.id;
+          var self = this;
+          this.callBackend('deleteTemplate', { id: id })
+            .then(function(res) {
+              if (res.ok) {
+                self.templates = self.templates.filter(function(t) { return t.id !== id; });
+                if (self.activeTemplate.id === id) {
+                  self.resetFormForNew();
+                }
+                self.showToast('Template berhasil dihapus');
+              } else {
+                self.showToast(res.message || 'Gagal menghapus template', 'error');
+              }
+              self.itemToDelete = null;
+              self.refreshIcons();
+            });
+        },
+
+        addBubble: function() {
+          this.activeTemplate.bubbles.push({
+            id: 'b_' + Date.now(),
+            text: '',
+            images: []
+          });
+          this.refreshIcons();
+        },
+
+        removeBubble: function(idx) {
+          if (this.activeTemplate.bubbles.length <= 1) return;
+          this.activeTemplate.bubbles.splice(idx, 1);
+          this.refreshIcons();
+        },
+
+        moveBubble: function(idx, direction) {
+          var target = idx + direction;
+          if (target < 0 || target >= this.activeTemplate.bubbles.length) return;
+          var temp = this.activeTemplate.bubbles[idx];
+          this.activeTemplate.bubbles[idx] = this.activeTemplate.bubbles[target];
+          this.activeTemplate.bubbles[target] = temp;
+          this.refreshIcons();
+        },
+
+        insertTag: function(bubbleIdx, tag) {
+          var textarea = document.getElementById('bubble-textarea-' + bubbleIdx);
+          if (!textarea) {
+            this.activeTemplate.bubbles[bubbleIdx].text += tag;
+            return;
+          }
+          var start = textarea.selectionStart;
+          var end = textarea.selectionEnd;
+          var text = this.activeTemplate.bubbles[bubbleIdx].text || '';
+          this.activeTemplate.bubbles[bubbleIdx].text = text.substring(0, start) + tag + text.substring(end);
+          this.$nextTick(function() {
+            textarea.focus();
+            textarea.setSelectionRange(start + tag.length, start + tag.length);
+          });
+        },
+
+        attachImage: function(bIdx) {
+          var input = document.getElementById('media-input-' + bIdx);
+          if (!input || !input.value.trim()) return;
+          var rawUrl = input.value.trim();
+          var parsedUrl = this.convertDriveLink(rawUrl);
+
+          if (!this.activeTemplate.bubbles[bIdx].images) {
+            this.activeTemplate.bubbles[bIdx].images = [];
+          }
+          this.activeTemplate.bubbles[bIdx].images.push(parsedUrl);
+          input.value = '';
+          this.refreshIcons();
+          this.showToast('Gambar berhasil dilampirkan');
+        },
+
+        removeImage: function(bIdx, imgIdx) {
+          this.activeTemplate.bubbles[bIdx].images.splice(imgIdx, 1);
+          this.refreshIcons();
+        },
+
+        convertDriveLink: function(url) {
+          var matchFile = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+          var matchId = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+          var fileId = matchFile ? matchFile[1] : (matchId ? matchId[1] : null);
+          if (fileId) {
+            return 'https://lh3.googleusercontent.com/d/' + fileId;
+          }
+          return url;
+        },
+
+        previewFullImage: function(url) {
+          this.previewImageModalUrl = url;
+          this.refreshIcons();
+        },
+
+        saveCurrentTemplate: function() {
+          if (!this.activeTemplate.name.trim()) {
+            this.showToast('Harap isi Nama Template!', 'error');
+            return;
+          }
+          if (this.activeTemplate.bubbles.length === 0) {
+            this.showToast('Minimal harus ada 1 bubble pesan!', 'error');
+            return;
+          }
+
+          this.isSaving = true;
+          var payload = {
+            id: this.activeTemplate.id,
+            name: this.activeTemplate.name.trim(),
+            productId: this.activeTemplate.productId,
+            categoryId: this.activeTemplate.categoryId,
+            engine: this.activeTemplate.engine,
+            bubblesJson: JSON.stringify(this.activeTemplate.bubbles)
+          };
+
+          var self = this;
+          this.callBackend('saveTemplate', payload)
+            .then(function(res) {
+              self.isSaving = false;
+              if (res.ok && res.data) {
+                var saved = res.data;
+                var existingIndex = self.templates.findIndex(function(t) { return t.id === saved.id; });
+                if (existingIndex !== -1) {
+                  self.templates[existingIndex] = saved;
+                } else {
+                  self.templates.unshift(saved);
+                }
+                self.activeTemplate.id = saved.id;
+                self.showTemplateModal = false;
+                self.showToast('Template broadcast berhasil disimpan!');
+              } else {
+                self.showToast(res.message || 'Gagal menyimpan template', 'error');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(err) {
+              self.isSaving = false;
+              self.showToast('Kesalahan saat menyimpan: ' + err.message, 'error');
+            });
+        },
+
+        renderTextWithVars: function(rawText) {
+          if (!rawText) return '';
+          var curProd = this.getProductName(this.activeTemplate.productId);
+          return rawText
+            .replace(/\{name\}/g, this.testVars.name || '{name}')
+            .replace(/\{var1\}/g, this.testVars.var1 || '{var1}')
+            .replace(/\{var2\}/g, this.testVars.var2 || '{var2}')
+            .replace(/\{product\}/g, curProd || '{product}');
+        },
+
+        renderWhatsAppFormatting: function(str) {
+          if (!str) return '';
+          var escaped = str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          escaped = escaped.replace(/\*(.*?)\*/g, '<strong>$1</strong>');
+          escaped = escaped.replace(/_(.*?)_/g, '<em>$1</em>');
+          escaped = escaped.replace(/~(.*?)~/g, '<del>$1</del>');
+          return escaped;
+        },
+
+        formatEngineText: function(rawText, engine) {
+          if (!rawText) return '';
+          var text = rawText;
+          if (engine === 'woowa') {
+            text = text
+              .replace(/\{name\}/g, '$nama')
+              .replace(/\{var1\}/g, '$var1')
+              .replace(/\{var2\}/g, '$var2')
+              .replace(/\{product\}/g, '$produk');
+          } else if (engine === 'fonnte') {
+            text = text;
+          } else {
+            text = this.renderTextWithVars(text);
+          }
+          return text;
+        },
+
+        copySingleBubble: function(idx) {
+          var b = this.activeTemplate.bubbles[idx];
+          if (!b) return;
+          var formatted = this.formatEngineText(b.text, this.activeTemplate.engine);
+          if (b.images && b.images.length > 0) {
+            formatted = formatted + '\n\n[Lampiran Gambar:\n' + b.images.join('\n') + ']';
+          }
+          var self = this;
+          navigator.clipboard.writeText(formatted).then(function() {
+            self.showToast('Teks Bubble ' + (idx + 1) + ' berhasil disalin!');
+          });
+        },
+
+        copyAllPayload: function() {
+          var engine = this.activeTemplate.engine;
+          var bubbles = this.activeTemplate.bubbles;
+          var self = this;
+          var output = '';
+
+          if (engine === 'woowa') {
+            var parts = bubbles.map(function(b) {
+              var t = self.formatEngineText(b.text, 'woowa');
+              if (b.images && b.images.length > 0) {
+                t = '[image: ' + b.images[0] + ']\n' + t;
+              }
+              return t;
+            });
+            output = parts.join('\n\n[sleep: 3]\n\n');
+          } else if (engine === 'fonnte') {
+            var parts = bubbles.map(function(b) {
+              var t = self.formatEngineText(b.text, 'fonnte');
+              if (b.images && b.images.length > 0) {
+                t = '{image: ' + b.images[0] + '}' + t;
+              }
+              return t;
+            });
+            output = parts.join('\n\n---\n\n');
+          } else {
+            var parts = bubbles.map(function(b, i) {
+              var t = '--- BUBBLE ' + (i + 1) + ' ---\n' + self.renderTextWithVars(b.text);
+              if (b.images && b.images.length > 0) {
+                t += '\n[Media: ' + b.images.join(', ') + ']';
+              }
+              return t;
+            });
+            output = parts.join('\n\n');
+          }
+
+          navigator.clipboard.writeText(output).then(function() {
+            self.showToast('Seluruh payload format ' + engine.toUpperCase() + ' berhasil disalin!');
+          });
+        },
+
+        openWhatsAppWeb: function(bIdx) {
+          var b = this.activeTemplate.bubbles[bIdx];
+          if (!b) return;
+          var text = this.renderTextWithVars(b.text);
+          var waUrl = 'https://web.whatsapp.com/send?text=' + encodeURIComponent(text);
+          window.open(waUrl, '_blank');
+        },
+
+        openMasterModal: function() {
+          this.showMasterModal = true;
+          this.refreshIcons();
+        },
+
+        saveProduct: function() {
+          if (!this.newProductName.trim()) return;
+          var name = this.newProductName.trim();
+          var self = this;
+          this.isManagingMaster = true;
+          this.callBackend('manageProduct', { action: 'create', data: { name: name } })
+            .then(function(res) {
+              self.isManagingMaster = false;
+              if (res.ok && res.data) {
+                self.products.push(res.data);
+                self.newProductName = '';
+                self.showToast('Brand produk berhasil ditambahkan');
+              } else {
+                self.showToast(res.message || 'Gagal menambah produk', 'error');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(e) {
+              self.isManagingMaster = false;
+              self.showToast('Gagal memproses request: ' + e.message, 'error');
+            });
+        },
+
+        deleteProduct: function(id) {
+          var self = this;
+          this.isManagingMaster = true;
+          this.callBackend('manageProduct', { action: 'delete', data: { id: id } })
+            .then(function(res) {
+              self.isManagingMaster = false;
+              if (res.ok) {
+                self.products = self.products.filter(function(p) { return p.id !== id; });
+                self.showToast('Brand produk dihapus');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(e) {
+              self.isManagingMaster = false;
+              self.showToast('Gagal menghapus produk: ' + e.message, 'error');
+            });
+        },
+
+        saveCategory: function() {
+          if (!this.newCategoryName.trim()) return;
+          var name = this.newCategoryName.trim();
+          var self = this;
+          this.isManagingMaster = true;
+          this.callBackend('manageCategory', { action: 'create', data: { name: name } })
+            .then(function(res) {
+              self.isManagingMaster = false;
+              if (res.ok && res.data) {
+                self.categories.push(res.data);
+                self.newCategoryName = '';
+                self.showToast('Kategori funnel berhasil ditambahkan');
+              } else {
+                self.showToast(res.message || 'Gagal menambah kategori', 'error');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(e) {
+              self.isManagingMaster = false;
+              self.showToast('Gagal memproses request: ' + e.message, 'error');
+            });
+        },
+
+        deleteCategory: function(id) {
+          var self = this;
+          this.isManagingMaster = true;
+          this.callBackend('manageCategory', { action: 'delete', data: { id: id } })
+            .then(function(res) {
+              self.isManagingMaster = false;
+              if (res.ok) {
+                self.categories = self.categories.filter(function(c) { return c.id !== id; });
+                self.showToast('Kategori funnel dihapus');
+              }
+              self.refreshIcons();
+            })
+            .catch(function(e) {
+              self.isManagingMaster = false;
+              self.showToast('Gagal menghapus kategori: ' + e.message, 'error');
+            });
+        }
+      };
+    }
+
+    // Register via alpine:init event (guaranteed to attach before Alpine executes)
+    document.addEventListener('alpine:init', function() {
+      Alpine.data('templateHubApp', createTemplateHubComponent);
+    });
+    // Global fallback for direct scope evaluation
+    window.templateHubApp = createTemplateHubComponent;
+  </script>
+  <!-- Alpine.js CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+  <style>
+    /* Custom Scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+    /* WA Chat Pattern Simulation */
+    .wa-bg-pattern {
+      background-color: #0c1317;
+      background-image: radial-gradient(#1e293b 0.75px, transparent 0.75px);
+      background-size: 16px 16px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen antialiased flex flex-col selection:bg-brand-500 selection:text-white" x-data="templateHubApp()" x-init="initApp()">
+
+  <!-- Top Navigation Header -->
+  <header class="h-16 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md px-4 lg:px-6 flex items-center justify-between z-30 shrink-0 sticky top-0">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-900/40 text-slate-950">
+        <i data-lucide="message-square-share" class="w-5 h-5 stroke-[2.5]"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-base font-bold tracking-tight text-white">OKEGAS Hub</h1>
+          <span class="text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">v1.0 Pro</span>
+        </div>
+        <p class="text-xs text-slate-400 hidden sm:block">Central Template Hub & CS Broadcast Engine</p>
+      </div>
+    </div>
+
+    <!-- Search Input in Header -->
+    <div class="flex-1 max-w-md mx-4 hidden md:block">
+      <div class="relative">
+        <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2"></i>
+        <input type="text" x-model="searchQuery" placeholder="Cari template, kata kunci copy, atau produk..." class="w-full bg-slate-800/70 border border-slate-700/80 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all">
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="flex items-center gap-2.5">
+      <button @click="openMasterModal()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 transition">
+        <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i>
+        <span class="hidden sm:inline">Kelola Master</span>
+      </button>
+
+      <button @click="resetFormForNew()" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 shadow-md shadow-emerald-500/20 transition">
+        <i data-lucide="plus" class="w-4 h-4 stroke-[2.5]"></i>
+        <span>Template Baru</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main 3-Column Workspace -->
+  <main class="flex-1 flex overflow-hidden">
+
+    <!-- COLUMN 1: Template Explorer (Sidebar Left) -->
+    <aside class="w-80 border-r border-slate-800/80 bg-slate-900/50 flex flex-col shrink-0 overflow-hidden">
+      <!-- Filter Controls -->
+      <div class="p-3 border-b border-slate-800/80 space-y-2.5">
+        <div class="block md:hidden">
+          <input type="text" x-model="searchQuery" placeholder="Cari template..." class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-xs text-slate-200">
+        </div>
+        <div>
+          <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Filter Brand Produk</label>
+          <div class="flex flex-wrap gap-1">
+            <button @click="filterProduct = ''" :class="filterProduct === '' ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="px-2.5 py-1 rounded-md text-[11px] transition">Semua</button>
+            <template x-for="p in products" :key="p.id">
+              <button @click="filterProduct = p.id" :class="filterProduct === p.id ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400 hover:text-slate-200'" class="px-2.5 py-1 rounded-md text-[11px] transition" x-text="p.name"></button>
+            </template>
+          </div>
+        </div>
+
+        <div>
+          <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Funnel Status</label>
+          <select x-model="filterCategory" class="w-full bg-slate-800 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+            <option value="">Semua Funnel Kategori</option>
+            <template x-for="c in categories" :key="c.id">
+              <option :value="c.id" x-text="c.name"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+
+      <!-- Template Items List -->
+      <div class="flex-1 overflow-y-auto p-3 space-y-2">
+        <!-- Skeleton Loaders -->
+        <template x-if="isLoading">
+          <div class="space-y-3">
+            <div class="h-20 bg-slate-800/40 rounded-xl animate-pulse"></div>
+            <div class="h-20 bg-slate-800/40 rounded-xl animate-pulse"></div>
+            <div class="h-20 bg-slate-800/40 rounded-xl animate-pulse"></div>
+          </div>
+        </template>
+
+        <!-- Empty State -->
+        <template x-if="!isLoading && filteredTemplates().length === 0">
+          <div class="text-center py-10 px-4">
+            <i data-lucide="folder-search" class="w-10 h-10 text-slate-600 mx-auto mb-2"></i>
+            <p class="text-xs text-slate-400 font-medium">Tidak ada template ditemukan</p>
+            <button @click="resetFormForNew()" class="mt-3 text-xs text-emerald-400 hover:underline">+ Buat template baru</button>
+          </div>
+        </template>
+
+        <!-- List Template Cards -->
+        <template x-for="tpl in filteredTemplates()" :key="tpl.id">
+          <div @click="selectTemplate(tpl)" :class="activeTemplate.id === tpl.id ? 'border-emerald-500/80 bg-slate-800/90 ring-1 ring-emerald-500/40' : 'border-slate-800/90 bg-slate-900/60 hover:bg-slate-800/50'" class="p-3 rounded-xl border cursor-pointer transition relative group">
+            <div class="flex items-start justify-between gap-1 mb-1.5">
+              <h3 class="text-xs font-semibold text-white line-clamp-1 group-hover:text-emerald-300 transition" x-text="tpl.name"></h3>
+              <!-- Engine Badge -->
+              <span class="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border"
+                :class="{
+                  'bg-emerald-500/10 text-emerald-400 border-emerald-500/30': tpl.engine === 'manual',
+                  'bg-indigo-500/10 text-indigo-400 border-indigo-500/30': tpl.engine === 'woowa',
+                  'bg-amber-500/10 text-amber-400 border-amber-500/30': tpl.engine === 'fonnte'
+                }"
+                x-text="tpl.engine">
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1.5 mb-2 flex-wrap">
+              <span class="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded" x-text="getProductName(tpl.productId)"></span>
+              <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded" x-text="getCategoryName(tpl.categoryId)"></span>
+            </div>
+
+            <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-slate-800/60">
+              <span class="flex items-center gap-1 text-[10px]">
+                <i data-lucide="layers" class="w-3 h-3 text-slate-400"></i>
+                <span x-text="parseBubbles(tpl.bubblesJson).length + ' Bubble'"></span>
+              </span>
+              <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition" @click.stop>
+                <button @click="openEditModal(tpl)" title="Edit Template" class="p-1 hover:text-emerald-400 transition"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+                <button @click="duplicateTemplate(tpl)" title="Duplikasi" class="p-1 hover:text-indigo-400 transition"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
+                <button @click="confirmDelete(tpl)" title="Hapus" class="p-1 hover:text-red-400 transition"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </aside>
+
+    <!-- COLUMN 2: Template Overview & Dispatch Center (Center Panel) -->
+    <section class="flex-1 flex flex-col bg-slate-900/40 backdrop-blur-md overflow-hidden border-r border-slate-800/80">
+      <!-- Active Template Header Banner -->
+      <div class="p-4 border-b border-slate-800/80 bg-slate-900/70 shrink-0 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <h2 class="text-sm font-bold text-white tracking-tight" x-text="activeTemplate.name || 'Template Belum Dipilih'"></h2>
+            <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full border"
+              :class="{
+                'bg-emerald-500/10 text-emerald-400 border-emerald-500/30': activeTemplate.engine === 'manual',
+                'bg-indigo-500/10 text-indigo-400 border-indigo-500/30': activeTemplate.engine === 'woowa',
+                'bg-amber-500/10 text-amber-400 border-amber-500/30': activeTemplate.engine === 'fonnte'
+              }"
+              x-text="activeTemplate.engine">
+            </span>
+          </div>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-300" x-text="getProductName(activeTemplate.productId)"></span>
+            <span class="bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-300" x-text="getCategoryName(activeTemplate.categoryId)"></span>
+            <span class="text-[11px] text-slate-400" x-text="(activeTemplate.bubbles ? activeTemplate.bubbles.length : 0) + ' Pesan Bubble'"></span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button type="button" @click="openEditModal(activeTemplate)" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center gap-1.5 transition">
+            <i data-lucide="pencil" class="w-3.5 h-3.5 text-emerald-400"></i>
+            <span>Edit Template</span>
+          </button>
+          <button type="button" @click="copyAllPayload()" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 shadow-md shadow-emerald-500/20 flex items-center gap-1.5 transition">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+            <span>Salin Format CRM</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Bubbles Inspector View Area -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <template x-for="(bubble, bIdx) in activeTemplate.bubbles" :key="bubble.id || bIdx">
+          <div class="bg-slate-900/80 backdrop-blur-xl border border-slate-800/90 rounded-xl p-4 shadow-lg space-y-3 relative">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+              <div class="flex items-center gap-2">
+                <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold flex items-center justify-center border border-emerald-500/30" x-text="bIdx + 1"></span>
+                <span class="text-xs font-semibold text-slate-200" x-text="'Bubble #' + (bIdx + 1)"></span>
+              </div>
+              <button type="button" @click="copySingleBubble(bIdx)" class="px-2.5 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-xs flex items-center gap-1 transition">
+                <i data-lucide="copy" class="w-3 h-3"></i> Salin Bubble
+              </button>
+            </div>
+
+            <!-- Bubble Text Preview -->
+            <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-xs text-slate-200 font-mono whitespace-pre-wrap leading-relaxed select-text" x-text="bubble.text || '(Bubble kosong)'"></div>
+
+            <!-- Media Attachments Chip Bar -->
+            <div x-show="bubble.images && bubble.images.length > 0" class="pt-1">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">Lampiran CDN / Drive</span>
+              <div class="flex flex-wrap gap-2">
+                <template x-for="(img, imgIdx) in bubble.images" :key="imgIdx">
+                  <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-1.5 pr-2.5 cursor-pointer hover:border-slate-700 transition" @click="previewFullImage(img)">
+                    <img :src="img" class="w-8 h-8 rounded object-cover border border-slate-800" onerror="this.src='https://placehold.co/60x60/1e293b/ef4444?text=X'">
+                    <span class="text-[11px] text-slate-300 font-mono max-w-[140px] truncate" x-text="img"></span>
+                    <i data-lucide="external-link" class="w-3 h-3 text-slate-400"></i>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Bottom Status Bar -->
+      <div class="p-3 bg-slate-900/80 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400 shrink-0">
+        <span class="flex items-center gap-1.5">
+          <i data-lucide="shield-check" class="w-3.5 h-3.5 text-emerald-400"></i>
+          <span>Sinkronisasi Google Sheets Terhubung</span>
+        </span>
+        <button type="button" @click="openEditModal(activeTemplate)" class="text-xs text-emerald-400 hover:text-emerald-300 font-medium transition flex items-center gap-1">
+          <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Buka Builder Modal
+        </button>
+      </div>
+    </section>
+
+    <!-- COLUMN 3: WhatsApp Live Simulator & Granular Dispatcher (Right Panel) -->
+    <aside class="w-96 bg-slate-950 flex flex-col shrink-0 overflow-hidden border-l border-slate-800/80">
+      <!-- Simulator Header -->
+      <div class="p-3 border-b border-slate-800/80 bg-slate-900/60 shrink-0">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+            <i data-lucide="smartphone" class="w-3.5 h-3.5"></i> Live Simulator & Dispatch
+          </span>
+          <span class="text-[10px] font-mono text-slate-400 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 uppercase" x-text="activeTemplate.engine"></span>
+        </div>
+
+        <!-- Quick Test Variables -->
+        <div class="grid grid-cols-2 gap-1.5 bg-slate-950/80 p-1.5 rounded-lg border border-slate-800">
+          <div>
+            <label class="text-[9px] text-slate-400 font-mono uppercase block">{name}:</label>
+            <input type="text" x-model="testVars.name" placeholder="Rina" class="w-full bg-slate-900 border border-slate-700/80 rounded px-1.5 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          </div>
+          <div>
+            <label class="text-[9px] text-slate-400 font-mono uppercase block">{var1}:</label>
+            <input type="text" x-model="testVars.var1" placeholder="Paket 3 Box" class="w-full bg-slate-900 border border-slate-700/80 rounded px-1.5 py-0.5 text-[11px] text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          </div>
+        </div>
+      </div>
+
+      <!-- Authentic WhatsApp Chat Mockup Container -->
+      <div class="flex-1 overflow-y-auto wa-bg-pattern p-3 space-y-3 flex flex-col">
+        <!-- Mock WA Chat Bar Header -->
+        <div class="bg-wa-teal text-white px-3 py-1.5 rounded-t-lg flex items-center justify-between shadow">
+          <div class="flex items-center gap-2">
+            <div class="w-7 h-7 rounded-full bg-slate-200/20 flex items-center justify-center font-bold text-xs">C</div>
+            <div>
+              <p class="text-xs font-semibold leading-tight" x-text="testVars.name || 'Calon Customer'"></p>
+              <p class="text-[9px] text-emerald-200">online</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 text-white/80">
+            <i data-lucide="phone" class="w-3.5 h-3.5"></i>
+            <i data-lucide="video" class="w-3.5 h-3.5"></i>
+          </div>
+        </div>
+
+        <!-- Rendered Chat Bubbles -->
+        <div class="space-y-3 flex-1">
+          <template x-for="(b, bIndex) in activeTemplate.bubbles" :key="bIndex">
+            <div class="flex flex-col items-end space-y-1">
+              <!-- Outgoing WA Bubble -->
+              <div class="max-w-[90%] bg-wa-bubbleOut text-slate-100 rounded-lg p-2.5 rounded-tr-none shadow-md text-xs relative border border-emerald-900/30">
+                <!-- Attached Media Preview in WA Bubble -->
+                <div x-show="b.images && b.images.length > 0" class="mb-2 grid grid-cols-2 gap-1 rounded overflow-hidden">
+                  <template x-for="(imgSrc, iIdx) in b.images" :key="iIdx">
+                    <div class="relative group/simImg aspect-video bg-black/40 overflow-hidden rounded">
+                      <img :src="imgSrc" class="w-full h-full object-cover cursor-pointer" @click="previewFullImage(imgSrc)">
+                      <a :href="imgSrc" target="_blank" class="absolute bottom-1 right-1 bg-slate-900/80 p-0.5 rounded text-[9px] text-emerald-300 opacity-0 group-hover/simImg:opacity-100 transition flex items-center gap-0.5 px-1">
+                        <i data-lucide="external-link" class="w-2.5 h-2.5"></i> Buka
+                      </a>
+                    </div>
+                  </template>
+                </div>
+
+                <!-- Text Body parsed with WhatsApp bold / formatting -->
+                <div class="whitespace-pre-wrap leading-relaxed select-text font-sans" x-html="renderWhatsAppFormatting(renderTextWithVars(b.text))"></div>
+
+                <!-- Bubble Metadata (Time & Read Ticks) -->
+                <div class="flex items-center justify-end gap-1 text-[9px] text-emerald-300/70 mt-1">
+                  <span>10:45</span>
+                  <span class="text-sky-400 font-bold">✓✓</span>
+                </div>
+              </div>
+
+              <!-- Granular Per-Bubble Actions -->
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <button type="button" @click="copySingleBubble(bIndex)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700/80 flex items-center gap-1 transition">
+                  <i data-lucide="copy" class="w-3 h-3"></i>
+                  <span>Salin Bubble <span x-text="bIndex + 1"></span></span>
+                </button>
+                <template x-if="bIndex === 0">
+                  <button type="button" @click="openWhatsAppWeb(bIndex)" class="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 transition">
+                    <i data-lucide="send" class="w-3 h-3"></i>
+                    <span>Kirim WA Web</span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- MODAL / DRAWER POP-UP: TAMBAH & EDIT TEMPLATE LENGKAP -->
+  <div x-show="showTemplateModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/85 backdrop-blur-md" x-cloak>
+    <div @click.away="showTemplateModal = false" class="bg-slate-900/95 border border-slate-700/80 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl backdrop-blur-xl overflow-hidden">
+      <!-- Modal Header -->
+      <div class="p-4 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/80 shrink-0">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+            <i data-lucide="message-square-plus" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white" x-text="activeTemplate.id ? 'Edit Template Broadcast' : 'Buat Template Baru'"></h2>
+            <p class="text-[11px] text-slate-400">Susun pesan beruntun dan tautan gambar untuk integrasi CRM</p>
+          </div>
+        </div>
+        <button type="button" @click="showTemplateModal = false" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <!-- Modal Body (Form Fields + Visual Multi-Bubble Builder) -->
+      <div class="p-5 overflow-y-auto space-y-5 flex-1">
+        <!-- Template Metadata Inputs -->
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3.5 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+          <div class="md:col-span-5">
+            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Nama Template *</label>
+            <input type="text" x-model="activeTemplate.name" placeholder="Contoh: DVN - Followup Promo 30%" class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          </div>
+          <div class="md:col-span-2">
+            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Produk</label>
+            <select x-model="activeTemplate.productId" class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <template x-for="p in products" :key="p.id">
+                <option :value="p.id" x-text="p.name"></option>
+              </template>
+            </select>
+          </div>
+          <div class="md:col-span-2">
+            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Kategori Funnel</label>
+            <select x-model="activeTemplate.categoryId" class="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <template x-for="c in categories" :key="c.id">
+                <option :value="c.id" x-text="c.name"></option>
+              </template>
+            </select>
+          </div>
+          <div class="md:col-span-3">
+            <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Engine Format</label>
+            <div class="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
+              <button type="button" @click="activeTemplate.engine = 'manual'" :class="activeTemplate.engine === 'manual' ? 'bg-emerald-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'" class="py-1 rounded text-[10px] transition text-center">WA Direct</button>
+              <button type="button" @click="activeTemplate.engine = 'woowa'" :class="activeTemplate.engine === 'woowa' ? 'bg-indigo-500 text-white font-bold' : 'text-slate-400 hover:text-white'" class="py-1 rounded text-[10px] transition text-center">Woowa</button>
+              <button type="button" @click="activeTemplate.engine = 'fonnte'" :class="activeTemplate.engine === 'fonnte' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'" class="py-1 rounded text-[10px] transition text-center">Fonnte</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bubbles Builder Container -->
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+              <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i> Struktur Pesan Beruntun (Bubbles)
+            </span>
+            <span class="text-[11px] text-slate-400" x-text="(activeTemplate.bubbles ? activeTemplate.bubbles.length : 0) + ' Bubble disiapkan'"></span>
+          </div>
+
+          <template x-for="(bubble, bIdx) in activeTemplate.bubbles" :key="bubble.id || bIdx">
+            <div class="bg-slate-950/80 border border-slate-800/90 rounded-xl p-4 shadow-sm space-y-3 relative group">
+              <!-- Bubble Bar -->
+              <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                <div class="flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold flex items-center justify-center border border-emerald-500/30" x-text="bIdx + 1"></span>
+                  <span class="text-xs font-semibold text-slate-200" x-text="'Pesan Bubble ' + (bIdx + 1)"></span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <button type="button" @click="moveBubble(bIdx, -1)" :disabled="bIdx === 0" class="p-1 text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"><i data-lucide="chevron-up" class="w-4 h-4"></i></button>
+                  <button type="button" @click="moveBubble(bIdx, 1)" :disabled="bIdx === activeTemplate.bubbles.length - 1" class="p-1 text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"><i data-lucide="chevron-down" class="w-4 h-4"></i></button>
+                  <button type="button" @click="removeBubble(bIdx)" :disabled="activeTemplate.bubbles.length <= 1" class="p-1 text-slate-400 hover:text-red-400 disabled:opacity-30 disabled:pointer-events-none transition"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                </div>
+              </div>
+
+              <!-- Personalization Tag Chips & Emojis -->
+              <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="text-[10px] text-slate-400 font-medium mr-1">Tag:</span>
+                  <button type="button" @click="insertTag(bIdx, '{name}')" class="px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 font-mono transition">{name}</button>
+                  <button type="button" @click="insertTag(bIdx, '{var1}')" class="px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 font-mono transition">{var1}</button>
+                  <button type="button" @click="insertTag(bIdx, '{var2}')" class="px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 font-mono transition">{var2}</button>
+                  <button type="button" @click="insertTag(bIdx, '{product}')" class="px-2 py-0.5 rounded text-[10px] bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 font-mono transition">{product}</button>
+                </div>
+                <div class="flex items-center gap-1 flex-wrap">
+                  <template x-for="emo in ['👋', '🙏', '🚀', '🔥', '💰', '📦', '⭐', '✅', '📲', '🛒']" :key="emo">
+                    <button type="button" @click="insertTag(bIdx, emo)" class="p-1 text-xs hover:bg-slate-800 rounded transition" x-text="emo"></button>
+                  </template>
+                </div>
+              </div>
+
+              <!-- Text Body Composer -->
+              <div>
+                <textarea :id="'bubble-textarea-' + bIdx" x-model="bubble.text" rows="3" placeholder="Tuliskan format copy broadcast... Gunakan *tebal*, _miring_, atau tag variabel" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono leading-relaxed"></textarea>
+              </div>
+
+              <!-- Media Attachment Input -->
+              <div class="bg-slate-900/50 rounded-lg p-2.5 border border-slate-800 space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                    <i data-lucide="image" class="w-3.5 h-3.5 text-emerald-400"></i> Lampiran Gambar / Media
+                  </span>
+                  <span class="text-[10px] text-slate-400" x-text="(bubble.images ? bubble.images.length : 0) + ' Terlampir'"></span>
+                </div>
+
+                <div class="flex gap-1.5">
+                  <input type="text" :id="'media-input-' + bIdx" placeholder="Paste link Google Drive atau CDN direct link (https://...)" class="flex-1 bg-slate-950 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  <button type="button" @click="attachImage(bIdx)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 rounded text-xs font-medium flex items-center gap-1 transition">
+                    <i data-lucide="plus" class="w-3 h-3"></i> Lampirkan
+                  </button>
+                </div>
+
+                <div class="flex flex-wrap gap-2 pt-1" x-show="bubble.images && bubble.images.length > 0">
+                  <template x-for="(img, imgIdx) in bubble.images" :key="imgIdx">
+                    <div class="relative group/img w-16 h-16 rounded-lg overflow-hidden border border-slate-700 bg-slate-800 shrink-0">
+                      <img :src="img" class="w-full h-full object-cover" @click="previewFullImage(img)" title="Klik untuk perbesar" onerror="this.src='https://placehold.co/100x100/1e293b/ef4444?text=Broken'">
+                      <button type="button" @click="removeImage(bIdx, imgIdx)" class="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-red-600 text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition shadow">
+                        <i data-lucide="x" class="w-3 h-3"></i>
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <button type="button" @click="addBubble()" class="w-full py-2.5 border-2 border-dashed border-slate-800 hover:border-emerald-500/50 hover:bg-emerald-500/5 rounded-xl text-xs font-semibold text-slate-400 hover:text-emerald-400 flex items-center justify-center gap-2 transition">
+            <i data-lucide="plus-circle" class="w-4 h-4"></i> Tambah Bubble Pesan Berikutnya
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Action Footer -->
+      <div class="p-3.5 bg-slate-900 border-t border-slate-800 flex items-center justify-end gap-2.5 shrink-0">
+        <button type="button" @click="showTemplateModal = false" class="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 transition">
+          Batal
+        </button>
+
+        <button type="button" @click="saveCurrentTemplate()" :disabled="isSaving" class="px-5 py-2 rounded-lg text-xs font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 disabled:opacity-50 transition">
+          <template x-if="isSaving">
+            <svg class="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-slate-950" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+          </template>
+          <i x-show="!isSaving" data-lucide="save" class="w-3.5 h-3.5 stroke-[2.5]"></i>
+          <span>Simpan Template</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MASTER DATA MANAGEMENT MODAL -->
+  <div x-show="showMasterModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md" x-cloak>
+    <div @click.away="showMasterModal = false" class="bg-slate-900/95 border border-slate-700/80 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl backdrop-blur-xl overflow-hidden">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
+        <div class="flex items-center gap-2">
+          <i data-lucide="sliders-horizontal" class="w-5 h-5 text-emerald-400"></i>
+          <h2 class="text-sm font-bold text-white">Kelola Master Data (Brand & Funnel)</h2>
+        </div>
+        <button type="button" @click="showMasterModal = false" class="p-1 text-slate-400 hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+
+      <div class="p-4 overflow-y-auto space-y-6 flex-1">
+        <!-- Products Management -->
+        <div class="space-y-3">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i data-lucide="tag" class="w-3.5 h-3.5 text-emerald-400"></i> Master Brand / Produk
+          </h3>
+          <div class="flex gap-2">
+            <input type="text" x-model="newProductName" placeholder="Nama brand baru (misal: GlowSkin)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+            <button type="button" @click="saveProduct()" :disabled="isManagingMaster" class="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg transition flex items-center gap-1">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i> Tambah
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-1.5 pt-1">
+            <template x-for="p in products" :key="p.id">
+              <span class="inline-flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-2.5 py-1 rounded-md text-xs text-slate-200">
+                <span x-text="p.name"></span>
+                <button type="button" @click="deleteProduct(p.id)" :disabled="isManagingMaster" class="text-slate-400 hover:text-red-400 disabled:opacity-40"><i data-lucide="x" class="w-3 h-3"></i></button>
+              </span>
+            </template>
+          </div>
+        </div>
+
+        <hr class="border-slate-800">
+
+        <!-- Categories Management -->
+        <div class="space-y-3">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <i data-lucide="git-branch" class="w-3.5 h-3.5 text-indigo-400"></i> Master Funnel Kategori
+          </h3>
+          <div class="flex gap-2">
+            <input type="text" x-model="newCategoryName" placeholder="Kategori baru (misal: Follow Up H+3)" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+            <button type="button" @click="saveCategory()" :disabled="isManagingMaster" class="px-3.5 py-1.5 bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition flex items-center gap-1">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i> Tambah
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-1.5 pt-1">
+            <template x-for="c in categories" :key="c.id">
+              <span class="inline-flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-2.5 py-1 rounded-md text-xs text-slate-200">
+                <span x-text="c.name"></span>
+                <button type="button" @click="deleteCategory(c.id)" :disabled="isManagingMaster" class="text-slate-400 hover:text-red-400 disabled:opacity-40"><i data-lucide="x" class="w-3 h-3"></i></button>
+              </span>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3.5 bg-slate-950 border-t border-slate-800 text-right">
+        <button type="button" @click="showMasterModal = false" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white rounded-lg transition">Tutup</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DELETE CONFIRMATION MODAL (No native window.confirm) -->
+  <div x-show="itemToDelete !== null" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" x-cloak>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-sm w-full shadow-2xl space-y-4">
+      <div class="w-10 h-10 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center mx-auto">
+        <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+      </div>
+      <div class="text-center">
+        <h3 class="text-sm font-bold text-white mb-1">Hapus Template Ini?</h3>
+        <p class="text-xs text-slate-400" x-text="'Anda yakin ingin menghapus template &quot;' + (itemToDelete ? itemToDelete.name : '') + '&quot;? Tindakan ini tidak dapat dibatalkan.'"></p>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" @click="itemToDelete = null" class="flex-1 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300">Batal</button>
+        <button type="button" @click="executeDelete()" class="flex-1 py-1.5 rounded-lg text-xs font-bold bg-red-600 hover:bg-red-500 text-white">Hapus Permanen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMAGE LIGHTBOX MODAL -->
+  <div x-show="previewImageModalUrl !== null" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md" @click="previewImageModalUrl = null" x-cloak>
+    <div class="relative max-w-3xl max-h-[90vh] p-2" @click.stop>
+      <button @click="previewImageModalUrl = null" class="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center border border-slate-700"><i data-lucide="x" class="w-4 h-4"></i></button>
+      <img :src="previewImageModalUrl" class="max-w-full max-h-[85vh] object-contain rounded-xl border border-slate-800 shadow-2xl">
+    </div>
+  </div>
+
+  <!-- FLOATING TOAST NOTIFICATION -->
+  <div class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none" x-cloak>
+    <template x-for="toast in toasts" :key="toast.id">
+      <div class="px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2.5 text-xs font-medium border pointer-events-auto transition-all"
+        :class="{
+          'bg-emerald-950/90 text-emerald-200 border-emerald-800/80': toast.type === 'success',
+          'bg-red-950/90 text-red-200 border-red-800/80': toast.type === 'error',
+          'bg-slate-900/90 text-slate-200 border-slate-800/80': toast.type === 'info'
+        }">
+        <i data-lucide="check-circle" x-show="toast.type === 'success'" class="w-4 h-4 text-emerald-400"></i>
+        <i data-lucide="alert-circle" x-show="toast.type === 'error'" class="w-4 h-4 text-red-400"></i>
+        <span x-text="toast.message"></span>
+      </div>
+    </template>
+  </div>
+
+</body>
+</html>
